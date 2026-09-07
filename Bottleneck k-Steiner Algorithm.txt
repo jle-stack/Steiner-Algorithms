@@ -1,0 +1,2080 @@
+import numpy as np
+import copy
+import itertools
+import operator
+from numpy import random as rand
+import sympy as sp
+from scipy.optimize import fsolve
+from scipy.optimize import linprog
+import gurobipy as gp
+from gurobipy import GRB
+import math
+import time
+import matplotlib.pyplot as plt
+
+def dist(u, v):
+    """
+    Calculates the Euclidean distance between two points
+    u = [x1, y1] and v = [x2, y2]
+    """
+    dist = [(x - y) ** 2 for x, y in zip(u, v)]
+    return math.sqrt(sum(dist))
+
+
+def angle(b, a):
+    """
+    finds the angle of vertex b from vertex a (measured anticlockwise between 0 and 2 * pi)
+    """
+
+    if b[0] == a[0] and b[1] > a[1]:
+        angle = np.pi / 2
+    elif b[0] == a[0] and b[1] < a[1]:
+        angle = 3 * np.pi / 2
+
+    else:
+        angle = sp.atan((b[1] - a[1]) / (b[0] - a[0]))
+
+        if b[0] - a[0] < 0:
+            angle += np.pi
+        elif b[1] - a[1] < 0:
+            angle += 2 * np.pi
+
+    return angle
+
+
+def angle_three_points(a, b, c):
+    # calculates the non-reflex angle abc
+    ba = [a[0] - b[0], a[1] - b[1]]
+    bc = [c[0] - b[0], c[1] - b[1]]
+
+    if math.sqrt(ba[0] ** 2 + ba[1] ** 2) * math.sqrt(bc[0] ** 2 + bc[1] ** 2) < 0.00000001:
+        return "null"
+
+    if -1 <= np.dot(ba, bc) / (math.sqrt(ba[0] ** 2 + ba[1] ** 2) * math.sqrt(bc[0] ** 2 + bc[1] ** 2)) <= 1:
+        angle = math.acos(np.dot(ba, bc) / (math.sqrt(ba[0] ** 2 + ba[1] ** 2) * math.sqrt(bc[0] ** 2 + bc[1] ** 2)))
+    elif np.dot(ba, bc) / (math.sqrt(ba[0] ** 2 + ba[1] ** 2) * math.sqrt(bc[0] ** 2 + bc[1] ** 2)) > 1:
+        angle = 0
+    else:
+        angle = np.pi
+
+    return angle
+
+
+def point_reflect(point, line_point1, line_point2):
+    line_vector = [line_point2[0] - line_point1[0], line_point2[1] - line_point1[1]]
+    point_vector = [point[0] - line_point1[0], point[1] - line_point1[1]]
+
+    para_proj = [np.dot(point_vector, line_vector) / (np.linalg.norm(line_vector)) ** 2 * x for x in line_vector]
+    orth_proj = [point_vector[i] - para_proj[i] for i in range(2)]
+    reflected_point = [point[i] - 2 * orth_proj[i] for i in range(2)]
+
+    return reflected_point
+
+
+def intersect(arc1, arc2):
+    """
+    finds all intersection point(s) between arc1 and arc2
+    arc = [centrex, centrey, radius, angle1, angle2]
+    """
+
+    d = dist([arc1[0], arc1[1]], [arc2[0], arc2[1]])
+
+    if arc1[2] + arc2[2] > d and -d < arc1[2] - arc2[2] < d:
+        parasoln = (arc1[2] ** 2 - arc2[2] ** 2 + d ** 2) / (2 * d)
+        perpsoln = math.sqrt(arc1[2] ** 2 - parasoln ** 2)
+
+        x2 = arc1[0] + parasoln / d * (arc2[0] - arc1[0])
+        y2 = arc1[1] + parasoln / d * (arc2[1] - arc1[1])
+
+        x31 = x2 + perpsoln / d * (arc2[1] - arc1[1])
+        x32 = x2 - perpsoln / d * (arc2[1] - arc1[1])
+
+        y31 = y2 - perpsoln / d * (arc2[0] - arc1[0])
+        y32 = y2 + perpsoln / d * (arc2[0] - arc1[0])
+
+        solutions = [[x31, y31], [x32, y32]]
+
+    elif arc1[2] + arc2[2] == d:
+        x3 = arc1[0] + arc1[2] / d * (arc2[0] - arc1[0])
+        y3 = arc1[1] + arc1[2] / d * (arc2[1] - arc1[1])
+        solutions = [[x3, y3]]
+
+    elif arc1[2] - arc2[2] == d:
+        x3 = arc1[0] + arc1[2] / d * (arc2[0] - arc1[0])
+        y3 = arc1[1] + arc1[2] / d * (arc2[1] - arc1[1])
+        solutions = [[x3, y3]]
+
+    elif arc2[2] - arc1[2] == d:
+        x3 = arc2[0] + arc2[2] / d * (arc1[0] - arc2[0])
+        y3 = arc2[1] + arc2[2] / d * (arc1[1] - arc2[1])
+        solutions = [[x3, y3]]
+
+    else:
+        solutions = []
+
+    # """
+
+    feasibleindices = []
+    for i in range(len(solutions)):
+        solution = solutions[i]
+        arc1angle = angle(solution, [arc1[0], arc1[1]])
+        arc2angle = angle(solution, [arc2[0], arc2[1]])
+        solutionchecker = 1
+
+        if arc1[4] < arc1[3]:
+            if arc1[3] > arc1angle > arc1[4]:
+                solutionchecker = 0
+
+        elif arc1[3] < arc1[4]:
+            if arc1angle < arc1[3] or arc1angle > arc1[4]:
+                solutionchecker = 0
+
+        if arc2[4] < arc2[3] and solutionchecker == 1:
+            if arc2[3] > arc2angle > arc2[4]:
+                solutionchecker = 0
+
+        elif arc2[3] < arc2[4] and solutionchecker == 1:
+            if arc2angle < arc2[3] or arc2angle > arc2[4]:
+                solutionchecker = 0
+
+        if solutionchecker == 1:
+            feasibleindices.append(i)
+
+    feasiblesolutions = [solutions[x] for x in feasibleindices]
+
+    return feasiblesolutions
+
+
+def intersectray(point, arc):
+    """
+    determines the number of a times a horizontal & vertical rays from the point intersect the arc
+    point = (x, y)
+    arc = (centrex, centrey, radius, angle1, angle2)
+    """
+
+    leftcounter = 0
+    rightcounter = 0
+    botcounter = 0
+    topcounter = 0
+
+    if arc[1] - arc[2] < point[1] < arc[1] + arc[2]:
+
+        hori = math.sqrt(arc[2] ** 2 - (point[1] - arc[1]) ** 2)
+        hsolutions = [[arc[0] + hori, point[1]], [arc[0] - hori, point[1]]]
+
+    elif arc[1] - arc[2] == point[1]:
+
+        hsolutions = [[arc[0], arc[1] - arc[2]]]
+
+    elif arc[1] + arc[2] == point[1]:
+
+        hsolutions = [[arc[0], arc[1] + arc[2]]]
+
+    else:
+        hsolutions = []
+
+    for hsolution in hsolutions:
+        solutionangle = angle(hsolution, [arc[0], arc[1]])
+
+        if arc[4] > arc[3]:
+            if arc[3] < solutionangle < arc[4]:
+                if point[0] < hsolution[0]:
+                    rightcounter += 1
+                elif point[0] > hsolution[0]:
+                    leftcounter += 1
+                else:
+                    rightcounter += 1
+                    leftcounter += 1
+
+        elif arc[4] == arc[3]:
+            if point[0] < hsolution[0]:
+                rightcounter += 1
+            elif point[0] > hsolution[0]:
+                leftcounter += 1
+            else:
+                rightcounter += 1
+                leftcounter += 1
+
+        else:
+            if solutionangle > arc[3] or solutionangle < arc[4]:
+                if point[0] < hsolution[0]:
+                    rightcounter += 1
+                elif point[0] > hsolution[0]:
+                    leftcounter += 1
+                else:
+                    rightcounter += 1
+                    leftcounter += 1
+
+    if arc[0] - arc[2] < point[0] < arc[0] + arc[2]:
+
+        verti = math.sqrt(arc[2] ** 2 - (point[0] - arc[0]) ** 2)
+        vsolutions = [[point[0], arc[1] + verti], [point[0], arc[1] - verti]]
+
+    elif arc[0] - arc[2] == point[0]:
+
+        vsolutions = [[arc[0] - arc[2], arc[1]]]
+
+    elif arc[0] + arc[2] == point[0]:
+
+        vsolutions = [[arc[0] + arc[2], arc[1]]]
+
+    else:
+        vsolutions = []
+
+    for vsolution in vsolutions:
+        solutionangle = angle(vsolution, [arc[0], arc[1]])
+
+        if arc[4] > arc[3]:
+            if arc[3] < solutionangle < arc[4]:
+                if point[1] < vsolution[1]:
+                    topcounter += 1
+                elif point[1] > vsolution[1]:
+                    botcounter += 1
+                else:
+                    topcounter += 1
+                    botcounter += 1
+
+        elif arc[4] == arc[3]:
+            if point[1] < vsolution[1]:
+                topcounter += 1
+            elif point[1] > vsolution[1]:
+                botcounter += 1
+            else:
+                topcounter += 1
+                botcounter += 1
+
+        else:
+            if solutionangle > arc[3] or solutionangle < arc[4]:
+                if point[1] < vsolution[1]:
+                    topcounter += 1
+                elif point[1] > vsolution[1]:
+                    botcounter += 1
+                else:
+                    topcounter += 1
+                    botcounter += 1
+
+    return [leftcounter, rightcounter, botcounter, topcounter]
+
+
+def pointinsideregion(point, region):
+    """
+    returns 1 if the point (x, y) lies inside a region [arc1, vertex1, arc2, vertex2, arc3, ...]
+    """
+    length = len(region)
+    length //= 2
+
+    totalleftcounter = 0
+    totalrightcounter = 0
+    totalbotcounter = 0
+    totaltopcounter = 0
+
+    for i in range(length):
+        currentarc = region[2 * i]
+        [leftcounter, rightcounter, botcounter, topcounter] = intersectray(point, currentarc)
+        totalleftcounter += leftcounter
+        totalrightcounter += rightcounter
+        totalbotcounter += botcounter
+        totaltopcounter += topcounter
+
+    if totalleftcounter + totalrightcounter == 3:
+        answer = 1
+    elif totalleftcounter == totalrightcounter == 1:
+        answer = 1
+    else:
+        if totalbotcounter + totaltopcounter == 3:
+            answer = 1
+        elif totalbotcounter == totaltopcounter == 1:
+            answer = 1
+        else:
+            answer = 0
+
+    return answer
+
+
+def grow(region, upper_bound):
+    """
+    grows the region by the upper bound length
+    """
+    arcvertexno = len(region)
+
+    if arcvertexno == 2:
+        newregion = [x.copy() for x in region]
+        newregion[1][0] = (1 + upper_bound / newregion[0][2]) * (newregion[1][0] - newregion[0][0]) + newregion[0][0]
+        newregion[1][1] = (1 + upper_bound / newregion[0][2]) * (newregion[1][1] - newregion[0][1]) + newregion[0][1]
+        newregion[0][2] += upper_bound
+        return newregion
+
+    newregion = []
+
+    for i in range(arcvertexno):
+        # arc
+        if i % 2 == 0:
+            currentarc = region[i].copy()
+            currentarc[2] += upper_bound
+
+            # previous vertex was not smooth
+            if i != 0 and region[i - 1][2] == 0:
+                regionvertex = [currentarc[0] + currentarc[2] * math.cos(currentarc[3]),
+                                currentarc[1] + currentarc[2] * math.sin(currentarc[3]),
+                                1]
+                newregion[-1][4] = angle(regionvertex, currentvertex)
+                newregion.append(regionvertex)
+
+            newregion.append(currentarc)
+            regionvertex = [currentarc[0] + currentarc[2] * math.cos(currentarc[4]),
+                            currentarc[1] + currentarc[2] * math.sin(currentarc[4]),
+                            1]
+            newregion.append(regionvertex)
+
+        # vertex
+        elif region[i][2] == 0:
+            currentvertex = region[i].copy()
+            currentarc = [currentvertex[0], currentvertex[1], upper_bound, angle(regionvertex, currentvertex), 0]
+            newregion.append(currentarc)
+
+    if region[-1][2] == 0:
+        firstarc = newregion[0]
+        regionvertex = [firstarc[0] + firstarc[2] * math.cos(firstarc[3]),
+                        firstarc[1] + firstarc[2] * math.sin(firstarc[3]),
+                        1]
+        newregion[-1][4] = angle(regionvertex, currentvertex)
+        newregion.append(regionvertex)
+
+    return newregion
+
+
+def regionintersections(region1arcs, region2arcs):
+    """
+    finds every intersection point(s) between two regions
+
+    These intersections are ordered from the first region1 arc to the last region1 arc.
+    If there are two or more per arc, then they are ordered in an anticlockwise direction.
+    """
+
+    noofints = 0  # the total number of intersections
+    intersections = []  # list of intersections
+
+    for i, currentarc1 in enumerate(region1arcs):
+        angles = []
+        currentarcints = []
+        for j, currentarc2 in enumerate(region2arcs):
+            currentints = intersect(currentarc1, currentarc2)
+            for currentint in currentints:
+                tempangle = angle(currentint, [currentarc1[0], currentarc1[1]])
+
+                if currentarc1[3] > currentarc1[4] and tempangle <= currentarc1[4]:
+                    tempangle += 2 * np.pi
+
+                angles.append(tempangle)
+                noofints += 1
+                currentarcints.append([currentint[0], currentint[1], i, j])
+
+        if len(currentarcints) > 1:
+            currentarcints = [int for angle, int in sorted(zip(angles, currentarcints))]
+
+        intersections.extend(currentarcints)
+
+    return intersections, noofints
+
+
+def pathregion(region1, region2, intersections, noofints, pathchoice):
+    """
+    Given pathchoice, a list of which region edges are used after each intersection, this function
+    outputs the region resulting from an intersection of two regions.
+    """
+
+    intregion = []
+    region1arcs = region1[::2]
+    region2arcs = region2[::2]
+
+    for intno, int in enumerate(intersections):
+
+        intregion.append([int[0], int[1], 0])
+        firstangle = 1
+        currentregion = pathchoice[intno]
+
+        if currentregion == 1:
+            currentarcindex = int[2]
+            nextarcindex = intersections[(intno + 1) % noofints][2]
+        else:
+            currentarcindex = int[3]
+            nextarcindex = intersections[(intno + 1) % noofints][3]
+
+        region = [region1, region2]
+        regionarcs = [region1arcs, region2arcs]
+        while currentarcindex != nextarcindex:
+
+            temparc = regionarcs[currentregion - 1][currentarcindex].copy()
+
+            if firstangle == 1:
+                temparc[3] = angle(int, [regionarcs[currentregion - 1][currentarcindex][0],
+                                         regionarcs[currentregion - 1][currentarcindex][1]])
+                firstangle = 0
+
+            tempvertex = region[currentregion - 1][2 * currentarcindex + 1].copy()
+            intregion.append(temparc)
+            intregion.append(tempvertex)
+            currentarcindex += 1
+            currentarcindex %= len(regionarcs[currentregion - 1])
+
+        temparc = regionarcs[currentregion - 1][currentarcindex].copy()
+
+        if firstangle == 1:
+            temparc[3] = angle(int, [regionarcs[currentregion - 1][currentarcindex][0],
+                                     regionarcs[currentregion - 1][currentarcindex][1]])
+
+        temparc[4] = angle(intersections[(intno + 1) % noofints],
+                           [regionarcs[currentregion - 1][currentarcindex][0],
+                            regionarcs[currentregion - 1][currentarcindex][1]])
+
+        intregion.append(temparc)
+    intregion = intregion[-1:] + intregion[:-1]
+
+    return intregion
+
+
+def intersectandgrow(region1, region2, upper_bound):
+    """
+    finds the intersection of region1 and region2, then grows it by the upper bound length
+    """
+
+    # if at least one region is a circle, then region1 should be a circle
+    if len(region1) != 2 and len(region2) == 2:
+        temp = region2
+        region2 = region1
+        region1 = temp
+
+    region1arcs = region1[::2]
+    region2arcs = region2[::2]
+    intersections, noofints = regionintersections(region1arcs, region2arcs)
+
+    pathchoice = []
+
+    if noofints == 0:
+        if pointinsideregion(region1[1], region2) == 1:
+            intregion = grow(region1, upper_bound)
+            return intregion
+        elif pointinsideregion(region2[1], region1) == 1:
+            intregion = grow(region2, upper_bound)
+            return intregion
+        else:
+            return 0
+
+    # when there are intersections between region1 and region2 and region1 is a circle
+    elif len(region1arcs) == 1:
+        intangles = []
+        for intersection in intersections:
+            intangles.append(angle(intersection, [region1arcs[0][0], region1arcs[0][1]]))
+
+        for intno, intangle in enumerate(intangles):
+            if intno < noofints - 1:
+                region1pointangle = (intangle + intangles[intno + 1]) / 2
+            else:
+                region1pointangle = (intangle + intangles[0] + 2 * np.pi) / 2
+
+            region1point = [region1arcs[0][0] + region1arcs[0][2] * math.cos(region1pointangle),
+                            region1arcs[0][1] + region1arcs[0][2] * math.sin(region1pointangle)]
+
+            if pointinsideregion(region1point, region2) == 1:
+                pathchoice.append(1)
+            else:
+                pathchoice.append(2)
+
+    # when there are intersections between region1 and region2 and neither regions are a circle
+    else:
+        for intindex, currentint in enumerate(intersections):
+            currentregion1arc = region1arcs[currentint[2]]
+            if intersections[(intindex + 1) % noofints][2] != currentint[2]:
+                region1point = region1[2 * currentint[2] + 1]
+                if pointinsideregion(region1point, region2) == 1:
+                    pathchoice.append(1)  # region1 is the correct path
+                else:
+                    pathchoice.append(2)  # region2 is the correct path
+
+            else:
+                angle1 = angle(currentint,
+                               [currentregion1arc[0], currentregion1arc[1]])
+                angle2 = angle(intersections[(intindex + 1) % noofints],
+                               [region1arcs[intersections[(intindex + 1) % noofints][2]][0],
+                                region1arcs[intersections[(intindex + 1) % noofints][2]][1]])
+                if angle2 >= angle1:
+                    midangle = (angle1 + angle2) / 2
+                else:
+                    midangle = ((angle1 + angle2) / 2 + np.pi) % (2 * np.pi)
+
+                region1point = [currentregion1arc[0] + currentregion1arc[2] * math.cos(midangle),
+                                currentregion1arc[1] + currentregion1arc[2] * math.sin(midangle)]
+
+                if pointinsideregion(region1point, region2) == 1:
+                    pathchoice.append(1)  # region1 is the correct path
+                else:
+                    pathchoice.append(2)  # region2 is the correct path
+
+    intregion = pathregion(region1, region2, intersections, noofints, pathchoice)
+    intregion = grow(intregion, upper_bound)
+
+    return intregion
+
+
+def merge(b1, b2, upper_bound):
+    """
+    Merges two branches b1 and b2
+    """
+    # b1 = [[[x1, y1, type1, parent1], ... , [xp, yp, typep, parentp]], region, terminals used, current bound]
+
+    b1vertices = copy.deepcopy(b1[0])
+    b2vertices = copy.deepcopy(b2[0])
+
+    b1vertexno = len(b1vertices)
+    b2vertexno = len(b2vertices)
+
+    region1 = copy.deepcopy(b1[1])
+    region2 = copy.deepcopy(b2[1])
+
+    for i in range(b2vertexno - 1):
+        b2vertices[i][3] += b1vertexno
+
+    b2vertices[b2vertexno - 1][3] = b1vertexno + b2vertexno
+    b1vertices[b1vertexno - 1][3] = b1vertexno + b2vertexno
+
+    """
+    b1vertices[-1][0] += 0.3 * (b2vertices[-1][0] - b1vertices[-1][0])
+    b1vertices[-1][1] += 0.3 * (b2vertices[-1][1] - b1vertices[-1][1])
+    b2vertices[-1][0] += 0.3 * (b1vertices[-1][0] - b2vertices[-1][0])
+    b2vertices[-1][1] += 0.3 * (b1vertices[-1][1] - b2vertices[-1][1])
+    """
+
+    newregion = intersectandgrow(region1, region2, upper_bound)
+
+    if newregion == 0:
+        return 0
+    elif len(newregion) == 2:
+        b3vertices = b1vertices + b2vertices + [[newregion[0][0], newregion[0][1], -1, -1]]
+    else:
+        regionvertices = newregion[1::2]
+        xvert = [regionvertices[x][0] for x in range(len(newregion) // 2)]
+        yvert = [regionvertices[x][1] for x in range(len(newregion) // 2)]
+        b3vertices = b1vertices + b2vertices + [[np.mean(xvert), np.mean(yvert), -1, -1]]
+
+    newterminallist = list(set(b1[2]) | set(b2[2]))
+
+    b3 = [b3vertices, newregion, newterminallist, upper_bound, 1]
+
+    return b3
+
+
+def bead(b1, upper_bound):
+    """
+    Beads a branch b1
+    """
+    b1vertices = copy.deepcopy(b1[0])
+    b1vertexno = len(b1vertices)
+    region = copy.deepcopy(b1[1])
+
+    b1vertices[-1][3] = b1vertexno
+
+    newregion = grow(region, upper_bound)
+
+    if len(newregion) == 2:
+        b1newvertices = b1vertices + [[newregion[0][0], newregion[0][1], -1, -1]]
+    else:
+        regionvertices = newregion[1::2]
+        xvert = [regionvertices[x][0] for x in range(len(newregion) // 2)]
+        yvert = [regionvertices[x][1] for x in range(len(newregion) // 2)]
+        b1newvertices = b1vertices + [[np.mean(xvert), np.mean(yvert), -1, -1]]
+
+    bnew = [b1newvertices, newregion, b1[2], upper_bound, 1]
+    return bnew
+
+
+def terminate(b1, location_info, t):
+    """
+    Terminates a branch b1 with terminal t (index of the terminal 0 to (n-1)) OR
+    terminates a branch b1 with a steiner pt (if t = -1)
+
+    If t >= 0, location_info = N
+    If t = -1, location_info = [x-coord, y-coord, [terminals in cluster]]
+    """
+    b1vertices = copy.deepcopy(b1[0])
+    b1vertexno = len(b1vertices)
+    b1vertices[-1][3] = b1vertexno
+    newregion = "0"
+
+    if t >= 0:
+        newterminal = [list(location_info[t]) + [t, -1]]
+
+        """
+        b1vertices[-1][0] += 0.3 * (N[t][0] - b1vertices[-1][0])
+        b1vertices[-1][1] += 0.3 * (N[t][1] - b1vertices[-1][1])
+        """
+
+        b1newvertices = b1vertices + newterminal
+
+        newterminallist = list(set(b1[2]) | {t})
+
+    # terminating with a steiner pt (non-primary cluster generation)
+    else:
+        newsteinerpt = [[location_info[0], location_info[1], -2, -1]]
+        b1newvertices = b1vertices + newsteinerpt
+
+        newterminallist = list(set(b1[2]) | set(location_info[2]))
+
+    bnew = [b1newvertices, newregion, newterminallist, b1[3], b1[4]]
+    return bnew
+
+
+def plotr(objects):
+    """
+    plots a region = [arc1, vertex1, arc2, vertex2, arc3, ...] with random colours
+    """
+    colour = list(np.random.uniform(0, 1, 3))
+
+    for object in objects:
+        if 2 <= len(object) <= 3:
+            plt.plot(object[0], object[1], marker='o', markersize=5,
+                     markeredgecolor=colour, markerfacecolor=colour)
+
+        elif len(object) == 4:
+            plt.plot([object[0], object[2]], [object[1], object[3]], color="b")
+
+        else:
+            if object[3] >= object[4]:
+                arc_angles = np.linspace(float(object[3]), float(object[4] + 2 * np.pi), 30)
+
+            else:
+                arc_angles = np.linspace(float(object[3]), float(object[4]), 30)
+
+            arc_x = object[2] * np.cos(arc_angles) + object[0]
+            arc_y = object[2] * np.sin(arc_angles) + object[1]
+            plt.plot(arc_x, arc_y, color=colour)
+
+    return
+
+
+def MST(vertices):
+    nov = len(vertices)
+    mstindex = []
+    intree = [0]
+    outtree = list(range(1, nov))
+    for i in range(nov - 1):
+        mindist = 10 ** 50
+        for u in intree:
+            for v in outtree:
+                currentdist = dist(vertices[u], vertices[v])
+                if currentdist < mindist:
+                    mindist = currentdist
+                    uu = u
+                    vv = v
+
+        intree.append(vv)
+        outtree.remove(vv)
+        mstindex.append([uu, vv])
+
+    mst = [vertices[x[0]] + vertices[x[1]] for x in mstindex]
+
+    return mst
+
+
+def quadsolver(cluster, N):
+    vertexlist = cluster[0]
+    vertexno = len(vertexlist)
+    steinerno = 0
+    index_converter = [-1 for i in range(vertexno)]
+    for index in range(vertexno):
+        if vertexlist[index][2] == -1:
+            index_converter[index] = steinerno
+            steinerno += 1
+
+    if vertexno - steinerno == 2:
+
+        x_start = vertexlist[0][0]
+        y_start = vertexlist[0][1]
+
+        x_end = vertexlist[vertexno - 1][0]
+        y_end = vertexlist[vertexno - 1][1]
+
+        for vertex_index in range(vertexno - 2):
+            vertexlist[vertex_index + 1][0] = x_start + (vertex_index + 1) * (x_end - x_start) / (vertexno - 1)
+            vertexlist[vertex_index + 1][1] = y_start + (vertex_index + 1) * (y_end - y_start) / (vertexno - 1)
+
+        cluster[3] = dist([vertexlist[0][0], vertexlist[0][1]], [vertexlist[1][0], vertexlist[1][1]])
+        return cluster
+
+    parent_list = [x[3] for x in vertexlist]
+    soln_number = [-1 for i in range(vertexno)]
+    current_soln_number = 0
+    for i in range(vertexno):
+        if parent_list.count(i) >= 2:
+            soln_number[i] = current_soln_number
+            current_soln_number += 1
+
+    def equations(vars):
+        x = vars
+        eq = np.zeros(2 * (vertexno - steinerno) - 3)
+
+        not_scanned = list(i for i in range(vertexno - 1))
+
+        for eqno in range(2 * (vertexno - steinerno) - 3):
+
+            end_of_edge = 0
+            start_index = not_scanned[0]
+            current_index = not_scanned[0]
+            edge_length = 1
+
+            while end_of_edge == 0:
+
+                next_index = vertexlist[current_index][3]
+                not_scanned.pop(0)
+
+                if soln_number[next_index] != -1:
+                    end_of_edge = 1
+
+                elif len(not_scanned) == 0:
+                    end_of_edge = 1
+
+                if end_of_edge == 1:
+                    # if start vertex is a steiner pt
+                    if vertexlist[start_index][2] == -1:
+                        start_vertex = [x[2 * soln_number[start_index]], x[2 * soln_number[start_index] + 1]]
+                    else:
+                        start_vertex = [vertexlist[start_index][0], vertexlist[start_index][1]]
+
+                    # if end vertex is a steiner pt
+                    if vertexlist[next_index][2] == -1:
+                        end_vertex = [x[2 * soln_number[next_index]], x[2 * soln_number[next_index] + 1]]
+                    else:
+                        end_vertex = [N[vertexlist[next_index][2]][0], N[vertexlist[next_index][2]][1]]
+
+                    eq[eqno] = ((start_vertex[0] - end_vertex[0]) ** 2 +
+                                (start_vertex[1] - end_vertex[1]) ** 2 -
+                                (edge_length * x[2 * (vertexno - steinerno) - 4]) ** 2)
+
+                else:
+                    edge_length += 1
+                    current_index = next_index
+
+        return [i for i in eq]
+
+    initial_guess = []
+    for solution_no in range((vertexno - steinerno) - 2):
+        index_soln = index_converter.index(solution_no)
+        initial_guess.append(vertexlist[index_soln][0])
+        initial_guess.append(vertexlist[index_soln][1])
+
+    initial_guess.append(cluster[3])
+
+    solution = list(fsolve(equations, initial_guess))
+    cluster[3] = solution[2 * (vertexno - steinerno) - 4]
+
+    for soln_index in range(current_soln_number):
+        vertexlist[soln_number.index(soln_index)][0] = solution[2 * soln_index]
+        vertexlist[soln_number.index(soln_index)][1] = solution[2 * soln_index + 1]
+
+    not_scanned = [i for i in range(vertexno - 1)]
+    for edgenono in range(2 * (vertexno - steinerno) - 3):
+
+        end_of_edge = 0
+        vertices_in_edge = []
+        start_index = not_scanned[0]
+        current_index = not_scanned[0]
+        vertices_in_edge.append(start_index)
+        edge_length = 1
+
+        while end_of_edge == 0:
+
+            next_index = vertexlist[current_index][3]
+            vertices_in_edge.append(next_index)
+            not_scanned.pop(0)
+
+            if soln_number[next_index] != -1:
+                end_of_edge = 1
+
+            elif len(not_scanned) == 0:
+                end_of_edge = 1
+
+            if end_of_edge == 1 and edge_length > 1:
+                for bead_no in range(edge_length - 1):
+                    start_vertex = vertexlist[start_index]
+                    end_vertex = vertexlist[next_index]
+
+                    vertexlist[vertices_in_edge[bead_no + 1]][0] = (start_vertex[0] +
+                                                                    (bead_no + 1) / edge_length * (
+                                                                            end_vertex[0] - start_vertex[0]))
+                    vertexlist[vertices_in_edge[bead_no + 1]][1] = (start_vertex[1] +
+                                                                    (bead_no + 1) / edge_length * (
+                                                                            end_vertex[1] - start_vertex[1]))
+                vertices_in_edge = []
+
+            else:
+                edge_length += 1
+                current_index = next_index
+
+    return solution, index_converter
+
+
+def cluster_plot(cluster, N):
+    vertexlist = cluster[0]
+    vertexno = len(cluster[0])
+
+    for j in range(vertexno - 1):
+        plt.plot([vertexlist[j][0], vertexlist[vertexlist[j][3]][0]],
+                 [vertexlist[j][1], vertexlist[vertexlist[j][3]][1]], color='b')
+
+    for terminal_index in range(len(N)):
+        plt.plot(N[terminal_index][0], N[terminal_index][1], marker='o', markersize=5,
+                 markeredgecolor="k", markerfacecolor='k')
+
+    for i in range(vertexno):
+        if vertexlist[i][2] == -1:
+            plt.plot(vertexlist[i][0], vertexlist[i][1],
+                     marker='o', markersize=5, markeredgecolor="y", markerfacecolor='y')
+        elif vertexlist[i][2] == -2:
+            plt.plot(vertexlist[i][0], vertexlist[i][1],
+                     marker='o', markersize=6, markeredgecolor="r", markerfacecolor='r')
+
+    plt.axis('scaled')
+    plt.axis([0, 1, 0, 1])
+    # plt.show()
+    return
+
+
+def lune_test(cluster, N):
+    # performs a lune test on a completed cluster
+    # returns 0 if the lune test is not satisfied (this cluster is not optimal)
+    # returns 1 if the cluster satisfies the lune test
+
+    vertexlist = cluster[0]
+    terminal_indices = [i for i in range(len(N))]
+    n_cluster = len(vertexlist)
+    eps = 0.0001
+
+    for edge_index in range(n_cluster - 1):
+        u = vertexlist[edge_index]
+        v = vertexlist[u[3]]
+
+        endpoints = [u[2], v[2]]
+        non_endpoint_terminals = [x for x in terminal_indices if x not in endpoints]
+
+        uv_length = dist([u[0], u[1]], [v[0], v[1]])
+
+        for term_index in non_endpoint_terminals:
+            terminal = N[term_index]
+            if dist([u[0], u[1]], terminal) < uv_length - eps:
+                if dist([v[0], v[1]], terminal) < uv_length - eps:
+                    return 0
+
+        for vertex_index in [x for x in range(n_cluster) if x != edge_index and x != u[3]]:
+            if vertexlist[vertex_index][2] < 0:
+                if dist([u[0], u[1]], [vertexlist[vertex_index][0], vertexlist[vertex_index][1]]) < uv_length - eps:
+                    if dist([v[0], v[1]], [vertexlist[vertex_index][0], vertexlist[vertex_index][1]]) < uv_length - eps:
+                        return 0
+    return 1
+
+
+def cross_lune_test(primary, secondary, leaf_steiner_index):
+    # performs a lune test between a cluster and its lower level cluster
+    # returns 0 if the cross lune test is not satisfied (this cluster is not optimal)
+    # returns 1 if the cluster satisfies the cross lune test
+
+    eps = 0.00001
+
+    # checks whether primary edge lunes contain non-leaf steiner pts of secondary
+    for edge_ind in range(len(primary[0]) - 1):
+        u = primary[0][edge_ind]
+        v = primary[0][u[3]]
+
+        uv_length = dist([u[0], u[1]], [v[0], v[1]])
+
+        for vertex in secondary[0]:
+            # vertex is a non-leaf steiner pt of the secondary cluster
+            if vertex[2] == -1:
+                if dist([u[0], u[1]], [vertex[0], vertex[1]]) < uv_length - eps:
+                    if dist([v[0], v[1]], [vertex[0], vertex[1]]) < uv_length - eps:
+                        return 0
+
+    # checks whether secondary edge lunes contain steiner pts (except leaf steiner) of primary
+    for edge_ind in range(len(secondary[0]) - 1):
+        u = secondary[0][edge_ind]
+        v = secondary[0][u[3]]
+
+        uv_length = dist([u[0], u[1]], [v[0], v[1]])
+
+        for v_index, vertex in enumerate(primary[0]):
+            # vertex is a steiner pt (but not a leaf steiner) of the primary cluster
+            if vertex[2] == -1 and v_index != leaf_steiner_index:
+                if dist([u[0], u[1]], [vertex[0], vertex[1]]) < uv_length - eps:
+                    if dist([v[0], v[1]], [vertex[0], vertex[1]]) < uv_length - eps:
+                        return 0
+
+    return 1
+
+
+def in_hull(x, points):
+    n_points = len(points)
+    n_dim = len(x)
+    c = np.zeros(n_points)
+    A = np.r_[points.T, np.ones((1, n_points))]
+    b = np.r_[x, np.ones(1)]
+    lp = linprog(c, A_eq=A, b_eq=b)
+    return lp.success
+
+
+def convexhull_test(cluster, N):
+    # performs a convex hull test on a completed cluster
+    # returns 0 if the convex hull test is not satisfied (this cluster is not optimal)
+    # returns 1 if the cluster satisfies the convex hull test
+
+    hull_points = np.array([N[x] for x in cluster[2]])
+
+    for vertex in cluster[0]:
+        if vertex[2] == -1:
+            if in_hull([vertex[0], vertex[1]], hull_points) == 0:
+                return 0
+
+    return 1
+
+
+def acuteangle_test(cluster):
+    # performs an acute angle test on a completed cluster
+    # returns 0 if the acute angle test is not satisfied (this cluster is not optimal)
+    # returns 1 if the cluster satisfies the acute angle test
+    vertex_no = len(cluster[0])
+    degree_counter = [1 for i in range(vertex_no - 1)] + [0]
+    for i in range(len(cluster[0]) - 1):
+        vertex = cluster[0][i]
+        parent = vertex[3]
+        degree_counter[parent] += 1
+
+    for index, degree in enumerate(degree_counter):
+        if degree == 3:
+            a = cluster[0][index][3]
+            b = -1
+            c = -1
+
+            for pre_index in range(index):
+                if cluster[0][pre_index][3] == index and b == -1:
+                    b = pre_index
+                elif cluster[0][pre_index][3] == index:
+                    c = pre_index
+                    break
+
+            a = cluster[0][a]
+            b = cluster[0][b]
+            c = cluster[0][c]
+
+            if angle_three_points(a, b, c) == "null" or angle_three_points(a, b, c) > np.pi / 2:
+                return 0
+            elif angle_three_points(b, c, a) == "null" or angle_three_points(b, c, a) > np.pi / 2:
+                return 0
+            elif angle_three_points(c, a, b) == "null" or angle_three_points(c, a, b) > np.pi / 2:
+                return 0
+
+    return 1
+
+
+def circumcentre(a, b, c):
+    # finds the circumcentre of three points a, b and c
+
+    d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
+
+    # points a, b and c are collinear
+    if d == 0:
+        return 0
+
+    ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) +
+          (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / d
+    uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) +
+          (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / d
+
+    return [ux, uy]
+
+
+def heuristic_upperbound(N, k, eps):
+    # finds an upper bound for the length of a cluster by placing midpoints/circumcentres and
+    # calculating the MST
+
+    vertex_list = N.copy()
+
+    for iteration in range(k):
+
+        shortest_max_length = 999999
+
+        doubles = [list(x) for x in itertools.combinations(vertex_list, 2)]
+        for double in doubles:
+            newpoint = [(double[0][0] + double[1][0]) / 2, (double[0][1] + double[1][1]) / 2]
+
+            temp_list = vertex_list + [newpoint]
+            temp_tree = MST(temp_list)
+
+            longest_edge_length = 0
+
+            for edge in temp_tree:
+                edge_length = dist([edge[0], edge[1]], [edge[2], edge[3]])
+                if edge_length > longest_edge_length:
+                    longest_edge_length = edge_length
+
+            if longest_edge_length < shortest_max_length:
+                shortest_max_length = longest_edge_length
+                best_list = temp_list.copy()
+                best_length = longest_edge_length
+
+        triples = [list(x) for x in itertools.combinations(vertex_list, 3)]
+        for triple in triples:
+            newpoint = circumcentre(triple[0], triple[1], triple[2])
+
+            if newpoint == 0:
+                continue
+
+            temp_list = vertex_list + [newpoint]
+            temp_tree = MST(temp_list)
+
+            longest_edge_length = 0
+
+            for edge in temp_tree:
+                edge_length = dist([edge[0], edge[1]], [edge[2], edge[3]])
+                if edge_length > longest_edge_length:
+                    longest_edge_length = edge_length
+
+            if longest_edge_length < shortest_max_length:
+                shortest_max_length = longest_edge_length
+                best_list = temp_list.copy()
+                best_length = longest_edge_length
+
+        vertex_list = best_list.copy()
+
+    return best_length + eps
+
+
+def heuristic_upperbound2(N, k, eps):
+    # finds an upper bound for the length of a cluster by placing midpoints/circumcentres and
+    # calculating the MST
+
+    vertex_list = N.copy()
+    x_max = max(vertex_list)[0]
+    x_min = min(vertex_list)[0]
+
+    y_max = max(vertex_list, key=operator.itemgetter(1))[1]
+    y_min = min(vertex_list, key=operator.itemgetter(1))[1]
+
+    for iteration in range(k):
+
+        shortest_max_length = 999
+
+        doubles = [list(x) for x in itertools.combinations(vertex_list, 2)]
+        for double in doubles:
+            newpoint = [(double[0][0] + double[1][0]) / 2, (double[0][1] + double[1][1]) / 2]
+
+            temp_list = vertex_list + [newpoint]
+            temp_tree = MST(temp_list)
+
+            longest_edge_length = 0
+
+            for edge in temp_tree:
+                edge_length = dist([edge[0], edge[1]], [edge[2], edge[3]])
+                if edge_length > longest_edge_length:
+                    longest_edge_length = edge_length
+
+            if longest_edge_length < shortest_max_length:
+                shortest_max_length = longest_edge_length
+                best_list = temp_list.copy()
+                best_length = longest_edge_length
+
+        triples = [list(x) for x in itertools.combinations(vertex_list, 3)]
+        for triple in triples:
+            newpoint = circumcentre(triple[0], triple[1], triple[2])
+
+            if newpoint == 0:
+                continue
+            elif newpoint[0] > x_max or newpoint[1] > y_max:
+                continue
+            elif newpoint[0] < x_min or newpoint[1] < y_min:
+                continue
+
+            temp_list = vertex_list + [newpoint]
+            temp_tree = MST(temp_list)
+
+            longest_edge_length = 0
+
+            for edge in temp_tree:
+                edge_length = dist([edge[0], edge[1]], [edge[2], edge[3]])
+                if edge_length > longest_edge_length:
+                    longest_edge_length = edge_length
+
+            if longest_edge_length < shortest_max_length:
+                shortest_max_length = longest_edge_length
+                best_list = temp_list.copy()
+                best_length = longest_edge_length
+
+        vertex_list = best_list.copy()
+
+    return best_length + eps
+
+
+def lower_bound_test(cluster, bound):
+    # performs a lower bound test on a completed cluster
+    # returns 0 if the lower bound test is not satisfied (this cluster is not optimal)
+    # returns 1 if the cluster satisfies the lower bound test
+
+    vertex_list = cluster[0]
+    u = vertex_list[0]
+    v = vertex_list[u[3]]
+
+    u = u[:2]
+    v = v[:2]
+
+    d = dist(u, v)
+
+    if d < bound:
+        return 0
+    else:
+        return 1
+
+
+def MST_bounds(N, k, eps):
+    mst = MST(N)
+    m = len(mst)
+    edgelengths = []
+
+    for edge in mst:
+        length = dist([edge[0], edge[1]], [edge[2], edge[3]])
+        edgelengths.append(length)
+
+    beads = [0] * m
+
+    for i in range(k):
+        beadedlengths = [edgelengths[x] / (beads[x] + 1) for x in range(m)]
+        index_max = np.argmax(beadedlengths)
+        beads[index_max] += 1
+
+    beadedlengths = [edgelengths[x] / (beads[x] + 1) for x in range(m)]
+    upper = max(beadedlengths)
+    lower = upper / 4 - eps
+    upper += eps
+    return lower, upper
+
+
+def non_primary_vertices(current_cluster, cluster_order, n, k, C):
+
+    # Generates all the vertices necessary for this particular nonprimary cluster generation.
+
+    # First, we extract the internal Steiner points of the current_cluster (for termination)
+
+    # list of internal Steiner points
+    cluster_internal_points = []
+
+    for ind, vertex in enumerate(current_cluster[0]):
+        if vertex[2] == -1:
+            temp = vertex + [ind]
+            cluster_internal_points.append(temp)
+
+    # Second, we create the set of candidate vertices
+    current_bound = current_cluster[3]
+    current_steiner = len(current_cluster[0]) - len(current_cluster[2])
+
+    # cluster_B is the set of branches
+    cluster_B = [[] for i in range(k + 1 - current_steiner)]
+
+    terminals_unvisited = list(set(range(n)) - set(current_cluster[2]))
+
+    # adding terminals not in the cluster
+    for i in terminals_unvisited:
+        cluster_B[0].append([[[N[i][0], N[i][1], i, -1]],
+                             [[N[i][0], N[i][1], current_bound, 0, 0],
+                              [N[i][0] + current_bound, N[i][1], 1]], [i], current_bound, 0])
+
+    # adding internal steiner pts of clusters with at most "current_steiner" or
+    # (k - current_steiner - 1) steiner pts
+
+    steiner_limit = min(current_steiner, k - current_steiner - 1)
+
+    for i in range(steiner_limit):
+
+        # if the number of steiner pts are equal, only consider clusters with a lower index
+        if i == current_steiner - 1:
+            for non_main_cluster in C[i][:cluster_order]:
+
+                # only if two clusters do not share a common terminal
+                if any(j in current_cluster[2] for j in non_main_cluster[2]) == 0:
+                    for vertex in non_main_cluster[0]:
+                        # if the vertex is a steiner pt
+                        if vertex[2] < 0:
+                            lower_UB = min(non_main_cluster[3], current_bound)
+
+                            cluster_B[i + 1].append([[[vertex[0], vertex[1], -2, -1]],
+                                                     [[vertex[0], vertex[1], lower_UB, 0, 0],
+                                                      [vertex[0] + lower_UB, vertex[1], 1]],
+                                                     non_main_cluster[2], lower_UB, 0])
+        else:
+            # going through clusters with i+1 steiner points
+            for non_main_cluster in C[i]:
+
+                # only if two clusters do not share a common terminal
+                if any(j in current_cluster[2] for j in non_main_cluster[2]) == 0:
+                    for vertex in non_main_cluster[0]:
+                        # if the vertex is a steiner pt
+                        if vertex[2] < 0:
+                            lower_UB = min(non_main_cluster[3], current_bound)
+
+                            cluster_B[i + 1].append([[[vertex[0], vertex[1], -2, -1]],
+                                                     [[vertex[0], vertex[1], lower_UB, 0, 0],
+                                                      [vertex[0] + lower_UB, vertex[1], 1]],
+                                                     non_main_cluster[2], lower_UB, 0])
+
+
+
+
+
+    return cluster_B, cluster_internal_points
+
+
+def steiner_extract(c_list):
+
+    # extracts a non-leaf steiner pt from each cluster
+    steiner_set = []
+
+    for C_k in c_list:
+        for cluster in C_k:
+            vertex_list = cluster[0]
+
+            is_it_nonprimary = 0
+
+            for vertex in vertex_list:
+
+                if vertex[2] == -2:
+                    is_it_nonprimary = 1
+                    break
+
+            for vertex in vertex_list:
+                if vertex[2] == -1:
+                    steiner_set.append([vertex[0], vertex[1], is_it_nonprimary])
+
+    print(f"no of steiner pts is {len(steiner_set)}")
+
+    steiner_set = sorted(steiner_set)
+    final_steiner_set = []
+    eps = 0.00001
+
+    for index, point in enumerate(steiner_set):
+        if index == 0:
+            final_steiner_set.append(point)
+        else:
+            prev_point = [final_steiner_set[-1][0], final_steiner_set[-1][1]]
+            if dist([point[0], point[1]], prev_point) > eps:
+                final_steiner_set.append(point)
+
+    print(f"no of steiner pts AFTER TRIMMING is {len(final_steiner_set)}")
+
+    nonprimary = sum(steiner_pt[2] for steiner_pt in final_steiner_set)
+    primary = len(final_steiner_set) - nonprimary
+
+    return final_steiner_set, primary, nonprimary
+
+
+def mst_combination(steiner_set, terminal_set, k):
+    total_steiner_no = len(steiner_set)
+    n = len(terminal_set)
+    total_vertex_no = total_steiner_no + n
+
+    combination_indices = [list(x) for x in itertools.combinations([x for x in range(total_steiner_no)], k)]
+
+    total_no_comb = len(combination_indices)
+    minimum_tree_obj = 999999
+    minimum_tree_indices = []
+    minimum_tree = []
+
+    for ind, combination_index in enumerate(combination_indices):
+
+        print(f"checking combination {ind + 1} out of {total_no_comb}")
+
+        steiner_pts = []
+
+        for index in combination_index:
+            steiner_pts += [steiner_set[index]]
+
+        vertices = terminal_set + steiner_pts
+
+        current_mst = MST(vertices)
+
+        current_mst_length = 0
+
+        for edge in current_mst:
+            current_mst_length += dist([edge[0], edge[1]], [edge[2], edge[3]])
+
+        if current_mst_length < minimum_tree_obj:
+            lowest_tree_obj = current_mst_length
+            minimum_tree_indices = combination_index.copy()
+            minimum_tree = current_mst.copy()
+
+    return [minimum_tree_obj, minimum_tree_indices, minimum_tree]
+
+
+def flow_ilp(steiner_set, terminal_set, k):
+    print(f"steiner set: {steiner_set}")
+    total_steiner_no = len(steiner_set)
+    n = len(terminal_set)
+    total_vertex_no = total_steiner_no + n
+
+    tuples = [(i, j) for j in range(total_vertex_no) for i in range(j)]
+    length_array = np.zeros([total_vertex_no, total_vertex_no])
+
+    terminal_array = np.array(terminal_set)
+    min_index = np.argmin(terminal_array, axis=0)
+    root = min_index[0]
+
+    for j in range(total_vertex_no):
+        for i in range(j):
+
+            if i >= total_steiner_no:
+                u = terminal_set[i - total_steiner_no]
+            else:
+                u = steiner_set[i]
+
+            if j >= total_steiner_no:
+                v = terminal_set[j - total_steiner_no]
+            else:
+                v = steiner_set[j]
+
+            length_array[i][j] = dist(u, v)
+
+    flow = gp.Model("flow")
+
+    x = flow.addVars(total_steiner_no, vtype=GRB.BINARY, name="steiner")
+    f = flow.addVars(total_vertex_no, total_vertex_no, name="flow")
+    e = flow.addVars(tuples, vtype=GRB.BINARY, name="edge")
+    w = flow.addVar(name="objective")
+
+    Zsteiner_limit = flow.addConstr(sum(x[i] for i in range(total_steiner_no)) <= k)
+
+    # force trees
+    edge_limit = flow.addConstr(sum(e[i, j] for j in range(total_vertex_no) for i in range(j)) <= n + k - 1)
+
+    Zsteiner_flow = flow.addConstrs(
+        x[j] >= f[i, j] / (n - 1) for i in range(total_vertex_no) for j in range(total_steiner_no))
+    #steiner_taken = flow.addConstrs(
+        #x[j] <= sum(f[i, j] for i in range(total_vertex_no)) for j in range(total_steiner_no))
+    Zedge_flow = flow.addConstrs(
+        e[i, j] >= (f[i, j] + f[j, i]) / (n - 1) for j in range(total_vertex_no) for i in range(j))
+    #edge_taken = flow.addConstrs(e[i, j] <= (f[i, j] + f[j, i]) for j in range(total_vertex_no) for i in range(j))
+
+    #no_loops = flow.addConstrs(f[i, i] == 0 for i in range(total_vertex_no))
+    Znetflow_steiner = flow.addConstrs(
+        sum(f[i, u] - f[u, i] for i in range(total_vertex_no)) == 0 for u in range(total_steiner_no))
+    Znetflow_terminal = flow.addConstrs(sum(f[i, u] - f[u, i] for i in range(total_vertex_no)) == 1 for u in
+                                       [x for x in range(total_steiner_no, total_vertex_no) if
+                                        x != total_steiner_no + root])
+    Znetflow_root_out = flow.addConstr(sum(f[total_steiner_no + root, i] for i in range(total_vertex_no)) == n - 1)
+    #netflow_root_in = flow.addConstrs(f[i, total_steiner_no + root] == 0 for i in range(total_vertex_no))
+
+    Zmax_length = flow.addConstrs(w >= length_array[i, j] * e[i, j] for j in range(total_vertex_no) for i in range(j))
+
+    flow.setObjective(w, GRB.MINIMIZE)
+    flow.optimize()
+
+    used_steiner_indices = []
+    used_flow_arcs = []
+    used_edge_indices = []
+
+    for steiner_pt in x.values():
+        if steiner_pt.X > 0.5:
+            used_steiner_indices.append(steiner_pt.index)
+
+    for (i, j), flw in f.items():
+        if flw.X > 0.1:
+            used_flow_arcs.append([(i, j), flw.X])
+
+    for (i, j), edge in e.items():
+        if edge.X > 0.5:
+            used_edge_indices.append((i, j))
+
+    print(f"obj value {w.X}")
+    print(f"used stiener indices {used_steiner_indices}")
+    used_steiner_pts = [steiner_set[x] for x in used_steiner_indices]
+
+    return [used_steiner_indices, used_edge_indices, w.X, used_steiner_pts]
+
+
+def plot_bst(steiner_indices, edge_indices, S, N):
+    total_steiner_no = len(S)
+
+    for ind, terminal in enumerate(N):
+        plt.plot(terminal[0], terminal[1], marker='o', markersize=5,
+                 markeredgecolor="k", markerfacecolor='k')
+        # plt.text(terminal[0], terminal[1], str(ind + total_steiner_no))
+
+    for ind, steiner in enumerate(S):
+        if ind in steiner_indices:
+            plt.plot(steiner[0], steiner[1],
+                     marker='o', markersize=6, markeredgecolor="r", markerfacecolor='r')
+        else:
+            plt.plot(steiner[0], steiner[1],
+                     marker='o', markersize=3, markeredgecolor="g", markerfacecolor='g')
+        # plt.text(steiner[0], steiner[1], str(ind))
+
+    for (u, v) in edge_indices:
+
+        if u >= total_steiner_no:
+            x = N[u - total_steiner_no]
+        else:
+            x = S[u]
+
+        if v >= total_steiner_no:
+            y = N[v - total_steiner_no]
+        else:
+            y = S[v]
+
+        plt.plot([x[0], y[0]], [x[1], y[1]], color='b')
+
+    plt.axis('scaled')
+    plt.axis([-0.05, 1.05, -0.05, 1.05])
+
+
+def plot_bst2(steiner_indices, mst, S, N):
+    total_steiner_no = len(S)
+
+    for ind, terminal in enumerate(N):
+        plt.plot(terminal[0], terminal[1], marker='o', markersize=5,
+                 markeredgecolor="k", markerfacecolor='k')
+        # plt.text(terminal[0], terminal[1], str(ind + total_steiner_no))
+
+    for ind, steiner in enumerate(S):
+        if ind in steiner_indices:
+            plt.plot(steiner[0], steiner[1],
+                     marker='o', markersize=6, markeredgecolor="r", markerfacecolor='r')
+        else:
+            plt.plot(steiner[0], steiner[1],
+                     marker='o', markersize=3, markeredgecolor="g", markerfacecolor='g')
+        # plt.text(steiner[0], steiner[1], str(ind))
+
+    for edge in edge_indices:
+        x = [edge[0], edge[1]]
+        y = [edge[2], edge[3]]
+
+        plt.plot([x[0], y[0]], [x[1], y[1]], color='b')
+
+    plt.axis('scaled')
+    plt.axis([-0.05, 1.05, -0.05, 1.05])
+
+
+def plot_bst_mst(steiner_indices, edges, S, N, show_unused_steiner):
+    total_steiner_no = len(S)
+
+    for ind, terminal in enumerate(N):
+        plt.plot(terminal[0], terminal[1], marker='o', markersize=5,
+                 markeredgecolor="k", markerfacecolor='k')
+        # plt.text(terminal[0], terminal[1], str(ind + total_steiner_no))
+
+    for ind, steiner in enumerate(S):
+        if ind in steiner_indices:
+            plt.plot(steiner[0], steiner[1],
+                     marker='o', markersize=6, markeredgecolor="r", markerfacecolor='r')
+        elif show_unused_steiner == 1:
+            plt.plot(steiner[0], steiner[1],
+                     marker='o', markersize=3, markeredgecolor="g", markerfacecolor='g')
+        # plt.text(steiner[0], steiner[1], str(ind))
+
+    for edge in edges:
+
+        plt.plot([edge[0], edge[2]], [edge[1], edge[3]], color='b')
+
+    plt.axis('scaled')
+    plt.axis([-0.05, 1.05, -0.05, 1.05])
+
+def b_steiner(N, k, ILP_on, plot_on, eps):
+
+    start = time.perf_counter()
+
+    n = len(N)
+    B = [[] for i in range(k + 1)]
+    C = [[] for i in range(k)]
+
+    print(f"n = {n}, k = {k}")
+
+    lower_bound, upper_bound_init = MST_bounds(N, k, eps)
+    print(f"LB is {lower_bound} and UB is {upper_bound_init}")
+
+    """
+    aza = time.perf_counter()
+    heuristic_UB = heuristic_upperbound(N, k, eps)
+    print(f"heuristic UB is {heuristic_UB}")
+    bza = time.perf_counter()
+    """
+
+    azb = time.perf_counter()
+    heuristic_UB = heuristic_upperbound2(N, k, eps)
+    print(f"heuristic UB is {heuristic_UB}")
+    bzb = time.perf_counter()
+
+    upper_bound = min(upper_bound_init, heuristic_UB)
+
+    #print(f"time for first UB: {bza - aza}")
+    #print(f"time for second UB: {bzb - azb}")
+
+    pruned_primary_lune = [0 for i in range(k)]
+    pruned_primary_convexhull = [0 for i in range(k)]
+    pruned_primary_acute = [0 for i in range(k)]
+    #pruned_primary_lb = [0 for i in range(k)]
+    pruned_primary_UB = [0 for i in range(k)]
+    pruned_primary_all = [0 for i in range(k)]
+    pruned_secondary_lune = [0 for i in range(k)]
+    pruned_secondary_convexhull = [0 for i in range(k)]
+    pruned_secondary_acute = [0 for i in range(k)]
+    #pruned_secondary_lb = [0 for i in range(k)]
+    pruned_secondary_UB = [0 for i in range(k)]
+    pruned_secondary_crosslune = [0 for i in range(k)]
+    pruned_secondary_all = [0 for i in range(k)]
+
+    cluster_stats = [[0, 0] for i in range(k)]
+
+    end = time.perf_counter()
+    print(f"time at start {end - start}")
+
+    for i in range(n - 1):
+        B[0].append([[[N[i][0], N[i][1], i, -1]],
+                     [[N[i][0], N[i][1], upper_bound, 0, 0],
+                      [N[i][0] + upper_bound, N[i][1], 1]], [i], upper_bound, 0])
+
+    end = time.perf_counter()
+    print(f"time after B_0 {end - start}")
+
+    for i, top1 in enumerate(B[0]):
+        # beading for B_0
+        B[1].append(bead(top1, upper_bound))
+
+        # merging for B_0
+        for j in range(i + 1, n - 1):
+            top2 = B[0][j]
+            tempmerge = merge(top1, top2, upper_bound)
+            if tempmerge != 0:
+                B[1].append(tempmerge)
+
+    end = time.perf_counter()
+    print(f"time after 1 steiner pts {end - start}")
+
+    for steiner_no1 in range(1, k):
+        for top1_index, top1 in enumerate(B[steiner_no1]):
+
+            # beading
+            B[steiner_no1 + 1].append(bead(top1, upper_bound))
+
+            # terminating
+            region1 = top1[1]
+            temp_list = [i for i in range(n)]
+            max_index = max(top1[2])
+            unvisited = [x for x in temp_list if x > max_index]
+
+            for terminal_no in unvisited:
+                # """
+                if pointinsideregion(N[terminal_no], region1):
+                    finished_cluster = terminate(top1, N, terminal_no)
+                    quadsolver(finished_cluster, N)
+                    lune_result = lune_test(finished_cluster, N)
+                    convexhull_result = convexhull_test(finished_cluster, N)
+                    acuteangle_result = acuteangle_test(finished_cluster)
+                    #lb_result = lower_bound_test(finished_cluster, lower_bound)
+
+                    temp_vertex_list = finished_cluster[0]
+                    u = temp_vertex_list[0]
+                    v = temp_vertex_list[u[3]]
+
+                    u = u[:2]
+                    v = v[:2]
+
+                    d = dist(u, v)
+
+                    if d < top1[3]:
+                        UB_sat = 1
+                    else:
+                        UB_sat = 0
+
+                    if lune_result == 0:
+                        pruned_primary_lune[steiner_no1 - 1] += 1
+                    if convexhull_result == 0:
+                        pruned_primary_convexhull[steiner_no1 - 1] += 1
+                    if acuteangle_result == 0:
+                        pruned_primary_acute[steiner_no1 - 1] += 1
+                    #if lb_result == 0:
+                        #pruned_primary_lb[steiner_no1 - 1] += 1
+                    if UB_sat == 0:
+                        pruned_primary_UB[steiner_no1 - 1] += 1
+                    if lune_result == 0 or convexhull_result == 0 or acuteangle_result == 0 or UB_sat == 0:
+                        pruned_primary_all[steiner_no1 - 1] += 1
+                    # """
+                    if lune_result == 1 and convexhull_result == 1 and acuteangle_result == 1 and UB_sat == 1:
+                        # cluster_plot(finished_cluster, N)
+                        C[steiner_no1 - 1].append(finished_cluster)
+
+            # merging
+            for steiner_no2 in range(min(steiner_no1 + 1, k - steiner_no1)):
+                if steiner_no1 == steiner_no2:
+                    for top2_index in range(top1_index):
+                        top2 = B[steiner_no2][top2_index]
+                        # """
+                        if any(x in top1[2] for x in top2[2]) is False:
+                            tempmerge = merge(top1, top2, upper_bound)
+                            if tempmerge != 0:
+                                B[steiner_no1 + steiner_no2 + 1].append(tempmerge)
+
+                else:  # when top1 and top2 have a different no. of steiner pts
+                    for top2 in B[steiner_no2]:
+                        # """
+                        if any(x in top1[2] for x in top2[2]) is False:
+                            tempmerge = merge(top1, top2, upper_bound)
+                            if tempmerge != 0:
+                                B[steiner_no1 + steiner_no2 + 1].append(tempmerge)
+
+        gen_iter_end = time.perf_counter()
+        print(f"time after {steiner_no1 + 1} steiner pts {gen_iter_end - start}")
+
+    # termination for B_k
+    steiner_no1 = k
+    for top1 in B[steiner_no1]:
+        region1 = top1[1]
+        temp_list = [i for i in range(n)]
+        max_index = max(top1[2])
+        unvisited = [x for x in temp_list if x > max_index]
+        for terminal_no in unvisited:
+
+            if pointinsideregion(N[terminal_no], region1):
+                finished_cluster = terminate(top1, N, terminal_no)
+                quadsolver(finished_cluster, N)
+                lune_result = lune_test(finished_cluster, N)
+                convexhull_result = convexhull_test(finished_cluster, N)
+                acuteangle_result = acuteangle_test(finished_cluster)
+                #lb_result = lower_bound_test(finished_cluster, lower_bound)
+
+                temp_vertex_list = finished_cluster[0]
+                u = temp_vertex_list[0]
+                v = temp_vertex_list[u[3]]
+
+                u = u[:2]
+                v = v[:2]
+
+                d = dist(u, v)
+
+                if d < top1[3]:
+                    UB_sat = 1
+                else:
+                    UB_sat = 0
+
+                if lune_result == 0:
+                    pruned_primary_lune[steiner_no1 - 1] += 1
+                if convexhull_result == 0:
+                    pruned_primary_convexhull[steiner_no1 - 1] += 1
+                if acuteangle_result == 0:
+                    pruned_primary_acute[steiner_no1 - 1] += 1
+                #if lb_result == 0:
+                    #pruned_primary_lb[steiner_no1 - 1] += 1
+                if UB_sat == 0:
+                    pruned_primary_UB[steiner_no1 - 1] += 1
+                if lune_result == 0 or convexhull_result == 0 or acuteangle_result == 0 or UB_sat == 0:
+                    pruned_primary_all[steiner_no1 - 1] += 1
+                # """
+                if lune_result == 1 and convexhull_result == 1 and acuteangle_result == 1 and UB_sat == 1:
+                    # cluster_plot(finished_cluster, N)
+                    C[steiner_no1 - 1].append(finished_cluster)
+
+    for i in range(k):
+        cluster_stats[i][0] = len(C[i])
+
+    # begin the second phase
+    for cluster_steiner_no in range(1, k):
+        for cluster_order, main_cluster in enumerate(C[cluster_steiner_no - 1]):
+
+            # use the edge length of the cluster as the new upper bound
+            updated_upper_bound = main_cluster[3]
+
+            # generate the set of candidate vertices and internal Steiner points for this cluster
+            cluster_B, cluster_internal_points = non_primary_vertices(main_cluster, cluster_order, n, k, C)
+
+            for i, top1 in enumerate(cluster_B[0]):
+                # beading for cluster_B_0
+                cluster_B[1].append(bead(top1, top1[3]))
+
+                # merging for B_0
+                for j in range(i + 1, len(cluster_B[0])):
+                    top2 = cluster_B[0][j]
+                    tempmerge = merge(top1, top2, min(top1[3], top2[3]))
+                    if tempmerge != 0:
+                        B[1].append(tempmerge)
+
+            for steiner_no1 in range(1, k - cluster_steiner_no):
+                for top1_index, top1 in enumerate(cluster_B[steiner_no1]):
+
+                    # beading
+                    cluster_B[steiner_no1 + 1].append(bead(top1, top1[3]))
+
+                    # terminating
+
+                    # first check that at least one internal Steiner point has been generated
+                    if top1[4] == 1:
+                        # check whether any internal Steiner points of the main_cluster lie inside the region
+                        for internal_steiner_point in cluster_internal_points:
+                            if pointinsideregion([internal_steiner_point[0], internal_steiner_point[1]], top1[1]):
+                                finished_cluster = terminate(top1, [internal_steiner_point[0], internal_steiner_point[1],
+                                                                    main_cluster[2]], -1)
+                                quadsolver(finished_cluster, N)
+                                lune_result = lune_test(finished_cluster, N)
+                                convexhull_result = convexhull_test(finished_cluster, N)
+                                acuteangle_result = acuteangle_test(finished_cluster)
+                                #lb_result = lower_bound_test(finished_cluster, lower_bound)
+                                cross_lune_result = cross_lune_test(main_cluster, finished_cluster, internal_steiner_point[4])
+
+                                temp_vertex_list = finished_cluster[0]
+                                u = temp_vertex_list[0]
+                                v = temp_vertex_list[u[3]]
+
+                                u = u[:2]
+                                v = v[:2]
+
+                                d = dist(u, v)
+
+                                if d < top1[3]:
+                                    UB_sat = 1
+                                else:
+                                    UB_sat = 0
+
+                                # """
+                                if lune_result == 0:
+                                    pruned_secondary_lune[steiner_no1 - 1] += 1
+                                if convexhull_result == 0:
+                                    pruned_secondary_convexhull[steiner_no1 - 1] += 1
+                                if acuteangle_result == 0:
+                                    pruned_secondary_acute[steiner_no1 - 1] += 1
+                                #if lb_result == 0:
+                                    #pruned_secondary_lb[steiner_no1 - 1] += 1
+                                if UB_sat == 0:
+                                    pruned_secondary_UB[steiner_no1 - 1] += 1
+                                if cross_lune_result == 0:
+                                    pruned_secondary_crosslune[steiner_no1 - 1] += 1
+                                if lune_result == 0 or convexhull_result == 0 or acuteangle_result == 0 or UB_sat == 0 or cross_lune_result == 0:
+                                    pruned_secondary_all[steiner_no1 - 1] += 1
+                                # """
+                                if lune_result == 1 and convexhull_result == 1 and acuteangle_result == 1 and UB_sat == 1 and cross_lune_result == 1:
+                                    # cluster_plot(finished_cluster, N)
+                                    # cluster_plot(main_cluster, N)
+                                    # plt.show()
+                                    C[steiner_no1 + cluster_steiner_no - 1].append(finished_cluster)
+
+                    # merging
+                    for steiner_no2 in range(min(steiner_no1 + 1, k - steiner_no1)):
+                        if steiner_no1 == steiner_no2:
+                            for top2_index in range(top1_index):
+                                top2 = cluster_B[steiner_no2][top2_index]
+                                # """
+                                if any(x in top1[2] for x in top2[2]) is False:
+                                    tempmerge = merge(top1, top2, min(top1[3], top2[3]))
+                                    if tempmerge != 0:
+                                        B[steiner_no1 + steiner_no2 + 1].append(tempmerge)
+
+                        else:  # when top1 and top2 have a different no. of steiner pts
+                            for top2 in cluster_B[steiner_no2]:
+                                # """
+                                if any(x in top1[2] for x in top2[2]) is False:
+                                    tempmerge = merge(top1, top2, min(top1[3], top2[3]))
+                                    if tempmerge != 0:
+                                        B[steiner_no1 + steiner_no2 + 1].append(tempmerge)
+
+            # termination for branches with k - cluster_steiner_no steiner pts
+            steiner_no1 = k - cluster_steiner_no
+            for top1_index, top1 in enumerate(cluster_B[steiner_no1]):
+
+                # first check that at least one internal Steiner point has been generated
+                if top1[4] == 1:
+                    # check whether any internal Steiner points of the main_cluster lie inside the region
+                    for internal_steiner_point in cluster_internal_points:
+                        if pointinsideregion([internal_steiner_point[0], internal_steiner_point[1]], top1[1]):
+                            finished_cluster = terminate(top1, [internal_steiner_point[0], internal_steiner_point[1],
+                                                                main_cluster[2]], -1)
+                            quadsolver(finished_cluster, N)
+                            lune_result = lune_test(finished_cluster, N)
+                            convexhull_result = convexhull_test(finished_cluster, N)
+                            acuteangle_result = acuteangle_test(finished_cluster)
+                            #lb_result = lower_bound_test(finished_cluster, lower_bound)
+                            cross_lune_result = cross_lune_test(main_cluster, finished_cluster, internal_steiner_point[4])
+
+                            temp_vertex_list = finished_cluster[0]
+                            u = temp_vertex_list[0]
+                            v = temp_vertex_list[u[3]]
+
+                            u = u[:2]
+                            v = v[:2]
+
+                            d = dist(u, v)
+
+                            if d < top1[3]:
+                                UB_sat = 1
+                            else:
+                                UB_sat = 0
+
+                            if lune_result == 0:
+                                pruned_secondary_lune[steiner_no1 - 1] += 1
+                            if convexhull_result == 0:
+                                pruned_secondary_convexhull[steiner_no1 - 1] += 1
+                            if acuteangle_result == 0:
+                                pruned_secondary_acute[steiner_no1 - 1] += 1
+                            #if lb_result == 0:
+                                #pruned_secondary_lb[steiner_no1 - 1] += 1
+                            if UB_sat == 0:
+                                pruned_secondary_UB[steiner_no1 - 1] += 1
+                            if cross_lune_result == 0:
+                                pruned_secondary_crosslune[steiner_no1 - 1] += 1
+                            if lune_result == 0 or convexhull_result == 0 or acuteangle_result == 0 or UB_sat == 0 or cross_lune_result == 0:
+                                pruned_secondary_all[steiner_no1 - 1] += 1
+                            # """
+                            if lune_result == 1 and convexhull_result == 1 and acuteangle_result == 1 and UB_sat == 1 and cross_lune_result == 1:
+                                # cluster_plot(finished_cluster, N)
+                                # cluster_plot(main_cluster, N)
+                                # plt.show()
+                                C[steiner_no1 + cluster_steiner_no - 1].append(finished_cluster)
+
+        end = time.perf_counter()
+        print(f"time after finishing clusters with {cluster_steiner_no} steiner pts {end - start}")
+
+    time_after_gen = time.perf_counter()
+
+    for i in range(k + 1):
+        print(f"number of branches with {i} steiner pts is {len(B[i])}")
+
+    for j in range(k):
+        print(f"number of clusters with {j + 1} steiner pts is {len(C[j])}")
+
+    steiner_set, prim, nonprim = steiner_extract(C)
+
+    if ILP_on == 0:
+        no_ilp_end = time.perf_counter()
+        print(f"------------------------")
+        print(f"time taken: {no_ilp_end - start}")
+        print(f"gen time: {time_after_gen - start}")
+
+        """
+        print(f"n = {n}, k = {k}")
+
+        print(f"length of S (no of steiner pts): {len(steiner_set)}")
+        print(f"number of primary cluster steiner pts: {prim}")
+        print(f"number of secondary cluster steiner pts: {nonprim}")
+        
+        print(f"pruned by lune: {sum(pruned_primary_lune) + sum(pruned_secondary_lune)}")
+        print(f"pruned by convex hull: {sum(pruned_primary_convexhull) + sum(pruned_secondary_convexhull)}")
+        print(f"pruned by acute angle: {sum(pruned_primary_acute) + sum(pruned_secondary_acute)}")
+        print(f"pruned by UB: {sum(pruned_primary_UB) + sum(pruned_secondary_UB)}")
+        print(f"pruned by cross lune: {sum(pruned_secondary_crosslune)}")
+        print(f"total pruned by all {sum(pruned_primary_all) + sum(pruned_secondary_all)}")
+        """
+
+        for i in range(k):
+            cluster_stats[i][1] = len(C[i])
+
+        data_set = ["no ilp", len(steiner_set), prim, nonprim, sum(pruned_primary_lune) + sum(pruned_secondary_lune),
+                    sum(pruned_primary_convexhull) + sum(pruned_secondary_convexhull),
+                    sum(pruned_primary_acute) + sum(pruned_secondary_acute),
+                    sum(pruned_primary_UB) + sum(pruned_secondary_UB), sum(pruned_secondary_crosslune),
+                    sum(pruned_primary_all) + sum(pruned_secondary_all), cluster_stats, no_ilp_end - start,
+                    time_after_gen - start,
+                    "no ilp time"]
+
+        if plot_on == 1:
+            plot_bst([], [], steiner_set, N)
+            plt.show()
+
+        return "no ilp", len(steiner_set), data_set
+
+    else:
+        time_before_ILP = time.perf_counter()
+
+        [used_steiner_indices, used_edge_indices, obj, used_steiner_pts] = flow_ilp(steiner_set, N, k)
+
+        time_after_ILP = time.perf_counter()
+
+        #if phase_two == 0:
+        #else:
+            #[obj, minimum_tree_indices, minimum_tree] = mst_combination(steiner_set, N, k)
+
+        """
+        print(f"primary pruned by lune {pruned_primary_lune}")
+        print(f"primary pruned by convex hull {pruned_primary_convexhull}")
+        print(f"primary pruned by acute angle {pruned_primary_acute}")
+        #print(f"primary pruned by lower bound {pruned_primary_lb}")
+        print(f"primary pruned by UB {pruned_primary_UB}")
+        print(f"primary pruned by all {pruned_primary_all}")
+
+        print(f"secondary pruned by lune {pruned_secondary_lune}")
+        print(f"secondary pruned by convex hull {pruned_secondary_convexhull}")
+        print(f"secondary pruned by acute angle {pruned_secondary_acute}")
+        #print(f"secondary pruned by lower bound {pruned_secondary_lb}")
+        print(f"secondary pruned by UB {pruned_secondary_UB}")
+        print(f"secondary pruned by cross lune {pruned_secondary_crosslune}")
+        print(f"secondary pruned by all {pruned_secondary_all}")
+        """
+        print(f"------------------------")
+
+        print(f"n = {n}, k = {k}")
+        print(f"optimal obj value is, {obj}")
+
+        print(f"length of S (no of steiner pts): {len(steiner_set)}")
+        print(f"number of primary cluster steiner pts: {prim}")
+        print(f"number of secondary cluster steiner pts: {nonprim}")
+
+        print(f"pruned by lune: {sum(pruned_primary_lune) + sum(pruned_secondary_lune)}")
+        print(f"pruned by convex hull: {sum(pruned_primary_convexhull) + sum(pruned_secondary_convexhull)}")
+        print(f"pruned by acute angle: {sum(pruned_primary_acute) + sum(pruned_secondary_acute)}")
+        print(f"pruned by UB: {sum(pruned_primary_UB) + sum(pruned_secondary_UB)}")
+        print(f"pruned by cross lune: {sum(pruned_secondary_crosslune)}")
+        print(f"total pruned by all {sum(pruned_primary_all) + sum(pruned_secondary_all)}")
+
+        for i in range(k):
+            cluster_stats[i][1] = len(C[i])
+
+        print(f"no of clusters before/after nonprim: {cluster_stats}")
+
+        end = time.perf_counter()
+        print(f"total time taken {end - start}")
+        print(f"generation time {time_after_gen - start}")
+        print(f"ILP time {time_after_ILP - time_before_ILP}")
+
+        data_set = [obj, len(steiner_set), prim, nonprim, sum(pruned_primary_lune) + sum(pruned_secondary_lune),
+                    sum(pruned_primary_convexhull) + sum(pruned_secondary_convexhull), sum(pruned_primary_acute) + sum(pruned_secondary_acute),
+                    sum(pruned_primary_UB) + sum(pruned_secondary_UB), sum(pruned_secondary_crosslune),
+                    sum(pruned_primary_all) + sum(pruned_secondary_all), cluster_stats, end - start, time_after_gen - start,
+                    time_after_ILP - time_before_ILP]
+
+        if plot_on == 1:
+            for used_steiner_pt in used_steiner_pts:
+                N.append([used_steiner_pt[0], used_steiner_pt[1]])
+
+            soln = MST(N)
+
+            show_unused_steiner = 2
+            plot_bst_mst(used_steiner_indices, soln, steiner_set, N, show_unused_steiner)
+            #plot_bst(used_steiner_indices, used_edge_indices, steiner_set, N)
+
+            plt.show()
+
+        return obj, len(steiner_set), data_set
+
+
+"""
+heuristic_bound = []
+beading_bound = []
+for iter in range(10):
+    N = [list(np.random.rand(2)) for i in range(30)]
+    k = 2
+    eps = 0.00001
+
+    UB = heuristic_upperbound(N, k, eps)
+    heuristic_bound.append(UB)
+
+    bound_2 = MST_bounds(N, k, eps)
+    beading_bound.append(bound_2[1])
+
+print(f"heuristic upper bound is: {np.mean(heuristic_bound)}")
+print(f"beading upper bound is: {np.mean(beading_bound)}")
+
+"""
+
+single_test = 0
+
+if single_test == 1:
+
+    N = [[0.08837067117552921, 0.9004505588044216], [0.22768695397670013, 0.646564708434109], [0.37940390354082987, 0.04908369863950446], [0.8366878136514512, 0.5599792167063378]]
+
+    N = [list(np.random.rand(2)) for i in range(7)]
+
+    # 8 terminals
+    # N = [[0.41858935801033004, 0.24291235575740144], [0.06812197565978129, 0.8445418492767905], [0.03221807310323177, 0.9081422261344454], [0.8518176228213288, 0.5789358049451099], [0.7022325028378311, 0.07550922521147607], [0.6541795193949336, 0.9467083911761148], [0.29669558485352066, 0.4478347461789808], [0.0560511836847607, 0.6106498352040486]]
+
+    # 10 terminals
+    # N = [[0.09990043313087771, 0.37978472424401744], [0.04270177344927195, 0.892828334728494], [0.43312427605647963, 0.4582013874478914], [0.14616324135677616, 0.42531024749235846], [0.029647445937922567, 0.6820018431174355], [0.24373509729332798, 0.08967936106808183], [0.2546132911456921, 0.40775815530337356], [0.8158765836246683, 0.09855464680244008], [0.4201290921353946, 0.30392407977033564], [0.32090760391797446, 0.09654051804882635]]
+
+    N = [[0.08837067117552921, 0.9004505588044216], [0.22768695397670013, 0.646564708434109], [0.37940390354082987, 0.04908369863950446], [0.8366878136514512, 0.5599792167063378]]
+
+    N = [[0.3525254919011451, 0.619099562707582], [0.26022692720299534, 0.257116146957987], [0.9248830731129686, 0.914528149553102], [0.8098674158752384, 0.9016972731665566], [0.8287306396102577, 0.7298576931012004], [0.7000532673721236, 0.7732805320838584], [0.286012598871227, 0.03151545052087579], [0.5231023703836419, 0.34996676567198204], [0.20960790232492588, 0.6586297226584924], [0.861833316263366, 0.8334966935514175]]
+
+    N = [list(np.random.rand(2)) for i in range(14)]
+
+    print(f"N: {N}")
+    obj = b_steiner(N, 3, 1, 1, 0.00001)
+
+elif single_test == 0:
+
+    no_iter = 8
+    n = 5
+    k = 3
+    have_ILP_on = 0
+    have_plot_on = 0
+
+    timelist = [0 for i in range(no_iter)]
+    steiner_number = [0 for i in range(no_iter)]
+
+    N_total = [[list(np.random.rand(2)) for i in range(n)] for i in range(no_iter)]
+
+    #N_total = [[[0.42485819766374755, 0.9274000943338245], [0.5341779737645584, 0.4677930650888813], [0.35716368168542734, 0.6514513467498451], [0.4194660119475996, 0.9641460261094518], [0.3831907710135769, 0.06501727867540497]], [[0.6499253709551248, 0.32372809899700195], [0.5353872280963353, 0.14756366543190058], [0.31042125570374457, 0.7516890854295107], [0.5501408541434891, 0.928933667138544], [0.6311301545333813, 0.2303462253462185]], [[0.6320250981975305, 0.7204370843325092], [0.14319748544695576, 0.2629130213651697], [0.5815748036742471, 0.36020793368889914], [0.8044466137340615, 0.05911038703725602], [0.5981119006198501, 0.9867725839650243]], [[0.742791204246062, 0.5639895427862525], [0.39138489242364094, 0.5256486700571088], [0.32703559157646656, 0.4442978555650129], [0.9382478763589303, 0.19025246340855628], [0.5549372952452695, 0.18636668245711685]], [[0.3163978954703984, 0.7535986906739518], [0.47660274226703014, 0.8276916428903763], [0.18839732036246315, 0.9881677815007492], [0.9211241118150723, 0.7333781783235319], [0.8027828499983265, 0.5900005694447397]], [[0.518269762372197, 0.3738452080350222], [0.207810973874905, 0.14549740353178664], [0.23184614144106386, 0.8652630284307098], [0.04596125286525643, 0.20854153943674214], [0.11975717990631851, 0.05212036982165258]], [[0.9546430531497103, 0.33088772813157163], [0.5384881308180527, 0.3095922461114129], [0.4160370873914303, 0.313163843394058], [0.14117368388092522, 0.5846944580039151], [0.24775607342840988, 0.1147998276276272]], [[0.9090347848835166, 0.2048417558606147], [0.864664877213004, 0.04899716792461273], [0.7320290603719903, 0.7161251602988857], [0.6591389402085833, 0.6810599333544951], [0.37203038938831334, 0.514030649732709]], [[0.0506180817852272, 0.8005348021192203], [0.5184515267827586, 0.8201308983435212], [0.9825700251358377, 0.43974168555618764], [0.0037038534166918824, 0.9062064147031252], [0.3368463410690892, 0.5831376162673232]], [[0.2974240927436791, 0.0895297425356062], [0.8095813214800448, 0.5616781413692684], [0.8486870265971742, 0.6890056517075259], [0.685753663774816, 0.5436912644121134], [0.6310079719631942, 0.5312814198694018]], [[0.4046114167247521, 0.11626899802897239], [0.9338702737176172, 0.4143069857457684], [0.5256652345975308, 0.9970182068044919], [0.9532574047423905, 0.6632206081723891], [0.887001211138799, 0.6133131967165116]], [[0.9102921517831202, 0.4303442392373533], [0.43156616585812846, 0.2301168590422451], [0.19514810196890253, 0.4035375816873923], [0.4522487199594931, 0.9440344639676906], [0.9311112979206102, 0.22114433897321384]], [[0.13724190661117663, 0.19492029726331428], [0.815517023859671, 0.3328086881599386], [0.9587445780975329, 0.3309777714748211], [0.734319681927486, 0.17830280037240076], [0.34618679852212353, 0.07838600694894993]], [[0.4369714600159559, 0.012724858642378822], [0.18425218400768117, 0.5989062190608901], [0.4020953805242339, 0.3283274116381988], [0.5889874257224033, 0.053039527307301215], [0.1654040145232114, 0.5882496446446998]], [[0.8942328158803357, 0.03644815097136467], [0.2908107248623225, 0.93510559805659], [0.4392681820784127, 0.3989643012524243], [0.41838207722442944, 0.980620842587939], [0.827140547859284, 0.5950016388422932]], [[0.6914207492714094, 0.9822608118526209], [0.8203529712168464, 0.6791171151161416], [0.998425863961243, 0.05947319807230422], [0.8151628323784724, 0.8396874268721599], [0.8358087288096004, 0.6167955678230498]], [[0.668107836873744, 0.425351257779236], [0.3836964922489433, 0.15846028325994876], [0.20803128755584177, 0.9820331946405689], [0.18755345494514908, 0.7999625377203342], [0.32502055177931233, 0.32300893446049117]], [[0.8120606942542355, 0.7592598234108173], [0.7900968316558824, 0.12139615151189254], [0.8436067804051959, 0.09128814175985056], [0.35110768102204837, 0.6759291877765511], [0.8448901603792639, 0.9212979184700935]], [[0.3064755615497925, 0.1978667165832667], [0.5623176532720155, 0.28888404231896436], [0.7452792486423351, 0.5279416734693079], [0.5839631076882884, 0.7632108438202716], [0.8111931280521747, 0.23461041281701533]], [[0.7835281222081686, 0.8517702604668165], [0.4824623600316561, 0.34562325848553166], [0.5657259287973196, 0.4634619080074017], [0.6494236042963835, 0.3213497269921367], [0.2881797748280178, 0.7417671212143009]]]
+    #N_total = [[[0.5902499325563163, 0.7539951776327691], [0.8247602803426194, 0.2615838000601596], [0.2613827388129, 0.407866117766045], [0.14428888291245945, 0.6038104772663097], [0.4744194479682322, 0.700570779219661], [0.6030397306113509, 0.32003493590920806], [0.7782943064236387, 0.5883786855831934], [0.3143675133466989, 0.32965398277327973]], [[0.411861923107411, 0.6492736341086272], [0.7116425963284523, 0.7617757247394179], [0.19428338675373735, 0.2959096494539142], [0.20360054736569266, 0.5702203297351952], [0.6338869950528636, 0.8305077145309641], [0.7855091483927481, 0.5645044300127077], [0.9687645382596223, 0.28648084290055775], [0.08307488199322677, 0.7447470760656484]], [[0.48101737190898386, 0.6674341627664931], [0.8325864850664694, 0.7959544765869732], [0.9235488980761329, 0.8978421764139941], [0.2587952579624784, 0.9491171839641102], [0.5327010718901007, 0.2890121855109078], [0.3857492577799301, 0.9493633172418207], [0.289010073863201, 0.27120701051216933], [0.44068710595914296, 0.9564659895052045]], [[0.5791433397017748, 0.8572965917854045], [0.38565767419856, 0.1478377141597963], [0.22705118694545212, 0.2715787602831984], [0.5985944271298245, 0.22500724234995728], [0.2903088859245875, 0.17441734812498655], [0.28992816696077117, 0.1654429526485779], [0.10064446262953908, 0.5968826635261356], [0.7860089428925652, 0.07137901088538623]], [[0.9326056773681033, 0.7920687699971292], [0.4620287779046318, 0.5092966975416487], [0.22606671755514152, 0.4517266198457459], [0.9978081417512347, 0.3964408327127964], [0.019886786574581206, 0.5089152744854664], [0.9050830503560042, 0.27145165334340604], [0.6211545719100232, 0.2024353209736499], [0.6062338109497488, 0.2657349498104957]], [[0.3362276112270852, 0.24575537225310762], [0.04255011785455931, 0.6219022872849116], [0.14996764298849452, 0.9539077179566939], [0.5017958816104789, 0.19859267553214333], [0.9365611680477832, 0.9983155062434129], [0.33470526755911734, 0.464298655560365], [0.37683155393782675, 0.8173123106610916], [0.10224816571508266, 0.7750955472905952]], [[0.20507397075200107, 0.9921024215870475], [0.15974722301839528, 0.4246490840064562], [0.6680870128064798, 0.24408742538171602], [0.8907470464881841, 0.30558997207415295], [0.1093550638321783, 0.7859301520000254], [0.4209229675758147, 0.9668779683689483], [0.6322081363033689, 0.13120332418864444], [0.30265930896548177, 0.19951714434582024]], [[0.7305364325721582, 0.13665197126737472], [0.6828271043491091, 0.649850167055411], [0.6001832985918071, 0.5972970352319774], [0.6307358599584059, 0.35565831773118095], [0.13615659128154067, 0.35808119762954527], [0.900859174991926, 0.7204663973946068], [0.9161616664414064, 0.6942353031847656], [0.44324629089740897, 0.7456308068254194]], [[0.6563232314031018, 0.7027670337449515], [0.29753395050681, 0.4771827247232777], [0.26492506761815715, 0.4745516469220282], [0.4011144888113821, 0.8032918962473641], [0.023332597150811596, 0.8194804626193644], [0.6707204558662304, 0.3448527324685694], [0.5023241252855233, 0.6188857822494688], [0.31433025442052276, 0.2765165322505324]], [[0.4753004662903637, 0.061175708325282074], [0.21446511706622617, 0.1337058248512618], [0.8346020736120816, 0.15507226532329765], [0.24141224849238108, 0.8376335792159413], [0.32562864100947975, 0.20218938546347032], [0.7194051782866004, 0.49065494156867173], [0.16819491061512049, 0.9080544109336819], [0.7164627427182203, 0.6346103257541671]], [[0.041803250060673425, 0.797047472358835], [0.5618073240101472, 0.4831772642363432], [0.25550080734091885, 0.8191491970891488], [0.012520233258733526, 0.5693378715404585], [0.38282787278229735, 0.2707548266451779], [0.25977657789918107, 0.0282331166287495], [0.41682019266528425, 0.46727060272275844], [0.5113097116906281, 0.7281544576779168]], [[0.9607766059992324, 0.7875875638057845], [0.661003224773744, 0.2619632390892809], [0.5709823330546991, 0.4497343235520803], [0.36704969904491347, 0.7204080188378175], [0.7955594396182809, 0.9133979586387002], [0.7335314203856801, 0.9278508060431022], [0.1052122756203755, 0.5103771792540601], [0.4607240298819736, 0.8828372616288698]], [[0.2107269606352633, 0.49460557187747256], [0.2252586960995031, 0.42627749476629495], [0.7701451431945505, 0.1871086343740892], [0.39355387396170327, 0.11601749340042489], [0.8047766240676328, 0.8126109673393225], [0.08609708373696756, 0.3119563010013714], [0.23510879972813714, 0.4849071954545733], [0.1018980962201046, 0.382319737797738]], [[0.9965934027780623, 0.42259074704883526], [0.2816344046700471, 0.401196362272637], [0.11113943119205894, 0.6718745043513181], [0.069980909121097, 0.6193355963850842], [0.4019219969732888, 0.050663546312090246], [0.6519473048519204, 0.6118245229649919], [0.6199455755092153, 0.04360933563054781], [0.46264437344944476, 0.1309654193423676]], [[0.5263014421714443, 0.26865410477416496], [0.8546896284076091, 0.5193518518255531], [0.3342751239038624, 0.7565427850975034], [0.8385511996415325, 0.7382854472984572], [0.8661536087191896, 0.17876023461774682], [0.2380847569886846, 0.31490540224434127], [0.5660058978090716, 0.537323909768009], [0.5180576895077779, 0.9621753992613944]], [[0.73935527572387, 0.0963826138371503], [0.45377979564340953, 0.18060752210831166], [0.664303197538715, 0.2605943104125751], [0.5594567794253945, 0.42062940594925546], [0.26245669682786776, 0.8116574952351987], [0.44155636012253685, 0.9057704553079541], [0.8391589979049661, 0.4192801577792169], [0.5167550864747956, 0.7084160632869874]], [[0.1208600497638983, 0.9703284847010006], [0.6244586050961878, 0.7828490703896182], [0.9422904239768034, 0.15166985418344348], [0.9258724620623151, 0.9495768407105541], [0.3101380050387842, 0.007623037238401964], [0.039500861856242464, 0.04676288187893407], [0.17860189641719504, 0.30475924350149663], [0.7324935293295534, 0.16584053734562743]], [[0.7195253237751975, 0.8006695029640317], [0.41999532084376423, 0.7682010040626543], [0.726866555509985, 0.39306800059337765], [0.9234238962236012, 0.6265361436513607], [0.02932210678267555, 0.7680965911838171], [0.32127785144799725, 0.7851281978069968], [0.8652769918809785, 0.8803380188042902], [0.081342587351522, 0.3391955370249736]], [[0.3841428886429077, 0.5992567120576875], [0.029881431030118533, 0.6460699107412511], [0.4694607201108145, 0.8234823542543], [0.8187247805378239, 0.2740031334871227], [0.7366710217842077, 0.4870175408933104], [0.5537972597580665, 0.08444839926916647], [0.8175332600213799, 0.8339745946591687], [0.7005104291331969, 0.5277590134842391]], [[0.7380212224119551, 0.6873656922705631], [0.015495121385756039, 0.3313338119191276], [0.030635413494784713, 0.9720590749523026], [0.7851001919058962, 0.8361473918851325], [0.06550938127997896, 0.4452514127327899], [0.7162322420882169, 0.5869008490929347], [0.46847002999547793, 0.47701528559843187], [0.6859646949580575, 0.6182108630300353]]]
+
+    data_lst = [[] for i in range(14)]
+    data_lst[10] = [[0,0] for i in range(3)]
+
+    for iter in range(no_iter):
+        N = N_total[iter]
+
+        obj, steiner_no, data = b_steiner(N, k, have_ILP_on, have_plot_on, 0.00001)
+
+        for data_iter in range(14):
+
+            # for cluster stats
+            if data_iter == 10:
+
+                data_lst[data_iter][0][0] += data[data_iter][0][0]
+                data_lst[data_iter][0][1] += data[data_iter][0][1]
+                data_lst[data_iter][1][0] += data[data_iter][1][0]
+                data_lst[data_iter][1][1] += data[data_iter][1][1]
+                data_lst[data_iter][2][0] += data[data_iter][2][0]
+                data_lst[data_iter][2][1] += data[data_iter][2][1]
+
+
+            else:
+                data_lst[data_iter].append(data[data_iter])
+
+    """
+    print(f"objective values: {data_lst[0]}")
+    print(f"no of steiner pts: {data_lst[1]}")
+    print(f"no of primary steiner pts: {data_lst[2]}")
+    print(f"no of secondary steiner pts: {data_lst[3]}")
+    print(f"pruned by lune: {data_lst[4]}")
+    print(f"pruned by convex hull: {data_lst[5]}")
+    print(f"pruned by acute angle: {data_lst[6]}")
+    print(f"pruned by UB: {data_lst[7]}")
+    print(f"pruned by crosslune: {data_lst[8]}")
+    print(f"pruned by all: {data_lst[9]}")
+    print(f"no of clusters before/after nonprim: {data_lst[10]}")
+    print(f"total time: {data_lst[11]}")
+    print(f"gen time: {data_lst[12]}")
+    print(f"ILP time: {data_lst[13]}")
+    """
+
+    print(f"--------------------------------")
+
+    print(f"n: {len(N_total[0])}, k:{k} , no of iterations: {no_iter}")
+
+    if have_ILP_on == 1:
+        print(f"average objective values: {np.mean(data_lst[0])}")
+
+    for i in range(3):
+        for j in range(2):
+            data_lst[10][i][j] /= no_iter
+
+
+    print(f"average no of steiner pts: {np.mean(data_lst[1])}")
+    print(f"average no of primary steiner pts: {np.mean(data_lst[2])}")
+    print(f"average no of secondary steiner pts: {np.mean(data_lst[3])}")
+    print(f"average pruned by lune: {np.mean(data_lst[4])}")
+    print(f"average pruned by convex hull: {np.mean(data_lst[5])}")
+    print(f"average pruned by acute angle: {np.mean(data_lst[6])}")
+    print(f"average pruned by UB: {np.mean(data_lst[7])}")
+    print(f"average pruned by crosslune: {np.mean(data_lst[8])}")
+    print(f"average pruned by all: {np.mean(data_lst[9])}")
+    print(f"average no of clusters before/after nonprim: {data_lst[10]}")
+    print(f"average total time: {np.mean(data_lst[11])}")
+    print(f"average gen time: {np.mean(data_lst[12])}")
+
+    if have_ILP_on == 1:
+        print(f"average ILP time: {np.mean(data_lst[13])}")
